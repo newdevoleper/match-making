@@ -128,6 +128,8 @@ PLANET_OWN_SIGN = {
 PLANET_EXALTATION = {"Sun": 0, "Moon": 1, "Mars": 9, "Mercury": 5, "Jupiter": 3, "Venus": 11, "Saturn": 6}
 PLANET_DEBILITATION = {"Sun": 6, "Moon": 7, "Mars": 3, "Mercury": 11, "Jupiter": 9, "Venus": 5, "Saturn": 0}
 
+ZODIAC_SIGNS = ["Aries", "Taurus", "Gemini", "Cancer", "Leo", "Virgo", "Libra", "Scorpio", "Sagittarius", "Capricorn", "Aquarius", "Pisces"]
+
 geolocator = Nominatim(user_agent="kp_match_app")
 
 # --- 2. CORE CALCULATION FUNCTIONS ---
@@ -147,6 +149,10 @@ def find_house_index(longitude, cusps):
 
 def find_house_from_lagna(planet_lon, lagna_lon):
     """Calculates Whole Sign House (1-12) from Lagna."""
+    # Ensure lagna_lon is a float
+    if isinstance(lagna_lon, list) and len(lagna_lon) > 0:
+        lagna_lon = lagna_lon[0] # Handle if lagna was passed as cusps list
+    
     lagna_sign = int(lagna_lon / 30)
     planet_sign = int(planet_lon / 30)
     house = (planet_sign - lagna_sign + 12) % 12 + 1
@@ -159,9 +165,15 @@ def get_navamsa_longitude(d1_lon):
     d1_sign_index = int(d1_lon / 30)
     pada_index = int(d1_lon_in_sign / PADA_SIZE) 
     
-    if d1_sign_index in [0, 3, 6, 9]: start_sign = 0
-    elif d1_sign_index in [1, 4, 7, 10]: start_sign = 9
-    else: start_sign = 6
+    # Movable Signs: Aries(0), Cancer(3), Libra(6), Capricorn(9) -> Start from sign itself
+    if d1_sign_index in [0, 3, 6, 9]: 
+        start_sign = d1_sign_index
+    # Fixed Signs: Taurus(1), Leo(4), Scorpio(7), Aquarius(10) -> Start from 9th (index + 8)
+    elif d1_sign_index in [1, 4, 7, 10]: 
+        start_sign = (d1_sign_index + 8) % 12
+    # Dual Signs: Gemini(2), Virgo(5), Sagittarius(8), Pisces(11) -> Start from 5th (index + 4)
+    else: 
+        start_sign = (d1_sign_index + 4) % 12
         
     d9_sign_index = (start_sign + pada_index) % 12
     d9_lon = (d9_sign_index * 30) + 15 
@@ -290,109 +302,270 @@ def calculate_ashtakoota(chart1_data, chart2_data):
     moon_rasi_index_c1 = int(moon_lon_c1 / 30) % 12
     moon_rasi_index_c2 = int(moon_lon_c2 / 30) % 12
     total_score = 0
+    details = []
+
+    # 1. VARNA (1 Point)
+    def get_varna_rank(rasi_index):
+        if rasi_index in [3, 7, 11]: return 3, "Brahmin"
+        if rasi_index in [0, 4, 8]: return 2, "Kshatriya"
+        if rasi_index in [1, 5, 9]: return 1, "Vaishya"
+        return 0, "Shudra"
     
-    def get_varna(rasi_index):
-        if rasi_index in [2, 5, 6, 9]: return 0
-        if rasi_index in [0, 4, 7, 10]: return 1
-        return 2
-    if get_varna(moon_rasi_index_c1) <= get_varna(moon_rasi_index_c2): total_score += 1
+    v1, v1_name = get_varna_rank(moon_rasi_index_c1)
+    v2, v2_name = get_varna_rank(moon_rasi_index_c2)
+    v_score = 1 if v1 >= v2 else 0
+    total_score += v_score
+    details.append(["Varna (Work)", f"{v_score} / 1", f"N1: {v1_name}, N2: {v2_name}", "N1 >= N2 is Good"])
     
-    def get_vashya(rasi_index):
-        if rasi_index in [0, 1]: return 0
-        if rasi_index in [2, 5, 6]: return 1
-        if rasi_index in [3]: return 2
-        if rasi_index in [4]: return 3
-        return 4
-    v1, v2 = get_vashya(moon_rasi_index_c1), get_vashya(moon_rasi_index_c2)
-    if v1 == v2: total_score += 2
-    elif (v1==0 and v2==3) or (v1==3 and v2==0): total_score += 0
-    else: total_score += 1
+    # 2. VASHYA (2 Points)
+    def get_vashya_group(rasi_index):
+        if rasi_index in [0, 1, 8, 9]: return 0, "Chatushpada" 
+        if rasi_index in [2, 5, 6, 10]: return 1, "Manava"
+        if rasi_index in [3, 11]: return 2, "Jalachara"
+        if rasi_index == 4: return 3, "Vanachara"
+        if rasi_index == 7: return 4, "Keeta"
+        return 1, "Manava"
+        
+    vas1, vas1_name = get_vashya_group(moon_rasi_index_c1)
+    vas2, vas2_name = get_vashya_group(moon_rasi_index_c2)
     
-    dist = (nak_index_c2 - nak_index_c1 + 27) % 27
-    dist2 = (nak_index_c1 - nak_index_c2 + 27) % 27
-    t_score = 0
-    if (dist + 1) % 9 not in [3, 5, 7]: t_score += 1.5
-    if (dist2 + 1) % 9 not in [3, 5, 7]: t_score += 1.5
-    total_score += t_score
+    vas_score = 0
+    if vas1 == vas2: vas_score = 2
+    elif (vas1 == 1 and vas2 == 0) or (vas1 == 0 and vas2 == 1): vas_score = 1
+    elif (vas1 == 1 and vas2 == 2) or (vas1 == 2 and vas2 == 1): vas_score = 1
+    elif (vas1 == 0 and vas2 == 2) or (vas1 == 2 and vas2 == 0): vas_score = 1
+    else: vas_score = 0
+    total_score += vas_score
+    details.append(["Vashya (Dominance)", f"{vas_score} / 2", f"N1: {vas1_name}, N2: {vas2_name}", "Compatible groups match"])
+
+    # 3. TARA (3 Points)
+    count_2_to_1 = (nak_index_c1 - nak_index_c2 + 27) % 27 + 1
+    rem_2_to_1 = count_2_to_1 % 9
+    count_1_to_2 = (nak_index_c2 - nak_index_c1 + 27) % 27 + 1
+    rem_1_to_2 = count_1_to_2 % 9
     
-    def get_yoni(nak_index):
-        yoni_map = {0: 1, 1: 2, 2: 3, 3: 4, 4: 5, 5: 6, 6: 7, 7: 8, 8: 9, 9: 10, 10: 11, 11: 12, 12: 13, 13: 14, 14: 1, 15: 2, 16: 3, 17: 4, 18: 5, 19: 6, 20: 7, 21: 8, 22: 9, 23: 10, 24: 11, 25: 12, 26: 13}
-        return yoni_map.get(nak_index, 0)
-    y1, y2 = get_yoni(nak_index_c1), get_yoni(nak_index_c2)
-    if y1 == y2: total_score += 4
-    elif (y1 + y2) % 2 == 0: total_score += 3
+    bad_tara = [3, 5, 7]
+    tara_score = 0
+    if rem_2_to_1 not in bad_tara: tara_score += 1.5
+    if rem_1_to_2 not in bad_tara: tara_score += 1.5
+    total_score += tara_score
+    details.append(["Tara (Destiny)", f"{tara_score} / 3", f"Dist: {count_2_to_1} & {count_1_to_2}", "Avoid 3, 5, 7 dist"])
     
-    rasi_lord_map = {0: "Mars", 1: "Venus", 2: "Mercury", 3: "Moon", 4: "Sun", 5: "Mercury", 6: "Venus", 7: "Mars", 8: "Jupiter", 9: "Saturn", 10: "Saturn", 11: "Jupiter"}
-    l1, l2 = rasi_lord_map.get(moon_rasi_index_c1), rasi_lord_map.get(moon_rasi_index_c2)
+    # 4. YONI (4 Points)
+    nak_to_yoni = {
+        0: 'Horse', 1: 'Elephant', 2: 'Sheep', 3: 'Snake', 4: 'Snake', 5: 'Dog', 6: 'Cat', 7: 'Sheep', 8: 'Cat',
+        9: 'Rat', 10: 'Rat', 11: 'Cow', 12: 'Buffalo', 13: 'Tiger', 14: 'Buffalo', 15: 'Tiger', 16: 'Deer', 17: 'Deer',
+        18: 'Dog', 19: 'Monkey', 20: 'Mongoose', 21: 'Monkey', 22: 'Lion', 23: 'Horse', 24: 'Lion', 25: 'Cow', 26: 'Elephant'
+    }
+    y1 = nak_to_yoni.get(nak_index_c1)
+    y2 = nak_to_yoni.get(nak_index_c2)
     
-    def get_graha_maitri(lord1, lord2):
+    enemies = [
+        {'Cow', 'Tiger'}, {'Elephant', 'Lion'}, {'Horse', 'Buffalo'}, 
+        {'Dog', 'Deer'}, {'Snake', 'Mongoose'}, {'Monkey', 'Sheep'}, {'Cat', 'Rat'}
+    ]
+    
+    yoni_score = 0
+    if y1 == y2: 
+        yoni_score = 4
+    else:
+        is_enemy = False
+        for pair in enemies:
+            if y1 in pair and y2 in pair:
+                is_enemy = True
+                break
+        if is_enemy:
+            yoni_score = 0
+        else:
+            yoni_score = 2
+    total_score += yoni_score
+    details.append(["Yoni (Nature)", f"{yoni_score} / 4", f"N1: {y1}, N2: {y2}", "Same=4, Enemy=0, Else=2"])
+
+    # 5. GRAHA MAITRI (5 Points)
+    rasi_lord_map = {0: "Mars", 1: "Venus", 2: "Mercury", 3: "Moon", 4: "Sun", 5: "Mercury", 
+                     6: "Venus", 7: "Mars", 8: "Jupiter", 9: "Saturn", 10: "Saturn", 11: "Jupiter"}
+    l1 = rasi_lord_map.get(moon_rasi_index_c1)
+    l2 = rasi_lord_map.get(moon_rasi_index_c2)
+    
+    def get_maitri_points(lord1, lord2):
         if lord1 == lord2: return 5
-        friendly_pairs = [("Sun", "Moon"), ("Sun", "Mars"), ("Sun", "Jupiter"), ("Moon", "Mars"), ("Moon", "Jupiter"),
-                         ("Mars", "Jupiter"), ("Mars", "Sun"), ("Mercury", "Venus"), ("Mercury", "Saturn"),
-                         ("Jupiter", "Sun"), ("Jupiter", "Moon"), ("Jupiter", "Mars"), ("Jupiter", "Saturn"),
-                         ("Venus", "Mercury"), ("Venus", "Saturn"), ("Saturn", "Mercury"), ("Saturn", "Jupiter"), ("Saturn", "Venus")]
-        if (lord1, lord2) in friendly_pairs and (lord2, lord1) in friendly_pairs: return 5
-        if (lord1, lord2) in friendly_pairs or (lord2, lord1) in friendly_pairs: return 4
-        if lord1 in ["Sun", "Moon"] and lord2 in ["Saturn", "Venus"]: return 0
-        return 1
-    total_score += get_graha_maitri(l1, l2)
+        l1_map = GRAHA_MAITRI_PARASHARI.get(lord1, {})
+        l2_map = GRAHA_MAITRI_PARASHARI.get(lord2, {})
+        s1 = l1_map.get(lord2, 1)
+        s2 = l2_map.get(lord1, 1)
+        if s1 == 2 and s2 == 2: return 5
+        if (s1 == 2 and s2 == 1) or (s1 == 1 and s2 == 2): return 4
+        if s1 == 1 and s2 == 1: return 3
+        if (s1 == 2 and s2 == 0) or (s1 == 0 and s2 == 2): return 1
+        if (s1 == 1 and s2 == 0) or (s1 == 0 and s2 == 1): return 0.5
+        return 0
+        
+    gm_score = get_maitri_points(l1, l2)
+    total_score += gm_score
+    details.append(["Graha Maitri", f"{gm_score} / 5", f"Lords: {l1} - {l2}", "Friendship of Rasi Lords"])
+
+    # 6. GANA (6 Points)
+    def get_gana_group(ni):
+        if ni in [0, 4, 6, 7, 12, 14, 16, 21, 26]: return 0, "Deva"
+        if ni in [1, 3, 5, 10, 11, 19, 20, 24, 25]: return 1, "Manusha"
+        return 2, "Rakshasa"
+        
+    g1, g1_name = get_gana_group(nak_index_c1)
+    g2, g2_name = get_gana_group(nak_index_c2)
     
-    def get_gana(nak_index):
-        if nak_index in [0, 4, 6, 7, 12, 14, 16, 21, 26]: return 0 
-        if nak_index in [1, 3, 5, 10, 11, 19, 20, 24, 25]: return 1 
-        return 2 
-    g1, g2 = get_gana(nak_index_c1), get_gana(nak_index_c2)
-    if g1 == g2: total_score += 6
-    elif (g1==0 and g2==1) or (g1==1 and g2==0): total_score += 5
-    elif (g1==1 and g2==2) or (g1==2 and g2==1): total_score += 1
-    
+    gana_score = 0
+    if g1 == g2: gana_score = 6
+    elif (g1 == 0 and g2 == 1) or (g1 == 1 and g2 == 0): gana_score = 6
+    elif (g1 == 1 and g2 == 2) or (g1 == 2 and g2 == 1): gana_score = 0
+    else: gana_score = 1
+    total_score += gana_score
+    details.append(["Gana (Temperament)", f"{gana_score} / 6", f"N1: {g1_name}, N2: {g2_name}", "Deva>Manusha>Rakshasa"])
+
+    # 7. BHAKOOT (7 Points)
     d_bhakoot = (moon_rasi_index_c2 - moon_rasi_index_c1 + 12) % 12
-    if d_bhakoot not in [2, 10, 5, 9, 6, 8]: total_score += 7
+    bad_bhakoot = [1, 4, 5, 7, 8, 11] # 2, 5, 6, 8, 9, 12 distances
     
-    if (nak_index_c1 % 3) != (nak_index_c2 % 3): total_score += 8
+    bhakoot_score = 0
+    reason = "Good Position"
+    if d_bhakoot not in bad_bhakoot:
+        bhakoot_score = 7
+    else:
+        if l1 == l2: 
+            bhakoot_score = 7
+            reason = "Exception: Same Lords"
+        elif (l1, l2) in [("Sun", "Moon"), ("Moon", "Sun")]: 
+            bhakoot_score = 7
+            reason = "Exception: Friendly Lords"
+        else: 
+            bhakoot_score = 0
+            reason = "Dosha (2-12, 5-9, 6-8)"
+            
+    total_score += bhakoot_score
+    details.append(["Bhakoot (Love)", f"{bhakoot_score} / 7", f"Distance: {d_bhakoot if d_bhakoot!=0 else 12}/12", reason])
+
+    # 8. NADI (8 Points)
+    n1 = nak_index_c1 % 3
+    n2 = nak_index_c2 % 3
+    nadi_names = ["Adi", "Madhya", "Antya"]
+    nadi_score = 0
+    if n1 != n2: nadi_score = 8
+    else: nadi_score = 0
+    total_score += nadi_score
+    details.append(["Nadi (Health)", f"{nadi_score} / 8", f"N1: {nadi_names[n1]}, N2: {nadi_names[n2]}", "Different Nadi is Good"])
     
-    return min(max(round(total_score), 0), 36)
+    return min(max(round(total_score), 0), 36), details
 
 def calculate_supplementary_factors(chart1_data, chart2_data):
     def check_affliction(sigs, houses):
         return any(h in sigs for h in houses)
 
     results = {}
+    details = []
     
+    # 1. Kuja Dosha Parity
     c1_dosha = chart1_data["mars_dosha_status"]["Total"] == "Afflicted"
     c2_dosha = chart2_data["mars_dosha_status"]["Total"] == "Afflicted"
-
+    
+    kd_status = "Clean"
     if c1_dosha == c2_dosha:
-        results['Kuja_Dosha_Parity'] = "Matched (Dosha Parity)"
+        kd_status = "Matched (Dosha Parity)"
     elif c1_dosha and not c2_dosha:
-        results['Kuja_Dosha_Parity'] = f"Unmatched (Dosha in {chart1_data['name']})"
+        kd_status = f"Unmatched (Dosha in {chart1_data['name']})"
     elif c2_dosha and not c1_dosha:
-        results['Kuja_Dosha_Parity'] = f"Unmatched (Dosha in {chart2_data['name']})"
-    else:
-        results['Kuja_Dosha_Parity'] = "Clean" 
+        kd_status = f"Unmatched (Dosha in {chart2_data['name']})"
+    
+    results['Kuja_Dosha_Parity'] = kd_status
+    details.append({
+        "factor": "Kuja Dosha (Mars)", 
+        "c1": chart1_data["mars_dosha_status"]["Total"], 
+        "c2": chart2_data["mars_dosha_status"]["Total"], 
+        "rule": "Mars in 2, 4, 7, 8, 12 from Lagna, Moon, Venus causes Dosha. Parity cancels.",
+        "verdict": kd_status
+    })
 
-    c1_ayur_risk = check_affliction(chart1_data["csl_significators"], [8, 12])
-    c2_ayur_risk = check_affliction(chart2_data["csl_significators"], [8, 12])
-    results['Ayurvriddhi_Match'] = "Poor (Shared Risk)" if c1_ayur_risk and c2_ayur_risk else "Good"
+    # 2. Ayurvriddhi (Longevity / Stability) - 7th CSL Affliction
+    # Using 6, 8, 12 as negative houses for 7th Cusp Sub Lord
+    c1_ayur_risk = check_affliction(chart1_data["csl_significators"], [6, 8, 12])
+    c2_ayur_risk = check_affliction(chart2_data["csl_significators"], [6, 8, 12])
+    
+    ayur_match = "Poor (Shared Risk)" if c1_ayur_risk and c2_ayur_risk else "Good"
+    results['Ayurvriddhi_Match'] = ayur_match
+    details.append({
+        "factor": "7th CSL Affliction (Stability)", 
+        "c1": "Afflicted (6,8,12)" if c1_ayur_risk else "Safe", 
+        "c2": "Afflicted (6,8,12)" if c2_ayur_risk else "Safe", 
+        "rule": "7th Cusp Sub Lord signifying 6, 8, 12 indicates instability.",
+        "verdict": ayur_match
+    })
+    
     results['Vaidhavya_Risk'] = "High" if c1_ayur_risk and c2_ayur_risk else "Low"
-    results['Pitra_Dosha_Match'] = "Present in Both" if chart1_data["pitra_dosha_present"] and chart2_data["pitra_dosha_present"] else "Mixed"
-    c1_prog_promise = check_affliction(chart1_data["csl_significators"], [5, 11])
-    c2_prog_promise = check_affliction(chart2_data["csl_significators"], [5, 11])
-    results['Progeny_Match'] = "Strong" if c1_prog_promise and c2_prog_promise else "Weak/Mixed"
+
+    # 3. Pitra Dosha
+    pd_status = "Present in Both" if chart1_data["pitra_dosha_present"] and chart2_data["pitra_dosha_present"] else "Mixed/Clean"
+    if not chart1_data["pitra_dosha_present"] and not chart2_data["pitra_dosha_present"]: pd_status = "Clean"
+    results['Pitra_Dosha_Match'] = pd_status
+    details.append({
+        "factor": "Pitra Dosha", 
+        "c1": "Present" if chart1_data["pitra_dosha_present"] else "Absent", 
+        "c2": "Present" if chart2_data["pitra_dosha_present"] else "Absent", 
+        "rule": "Sun/Moon conjunct Rahu/Ketu or Rahu/Ketu in 9th House.",
+        "verdict": pd_status
+    })
+
+    # 4. Progeny (Santana) - 5th CSL or 7th CSL links to 2, 5, 11
+    # Here checking CSL links to 5, 11
+    c1_prog_promise = check_affliction(chart1_data["csl_significators"], [2, 5, 11])
+    c2_prog_promise = check_affliction(chart2_data["csl_significators"], [2, 5, 11])
+    prog_match = "Strong" if c1_prog_promise and c2_prog_promise else "Weak/Mixed"
+    results['Progeny_Match'] = prog_match
+    details.append({
+        "factor": "Progeny Promise", 
+        "c1": "Yes (2,5,11)" if c1_prog_promise else "No", 
+        "c2": "Yes (2,5,11)" if c2_prog_promise else "No", 
+        "rule": "7th CSL should signify 2, 5, or 11 for progeny.",
+        "verdict": prog_match
+    })
+
+    # 5. Financial - 2, 11 links
     c1_dhana = check_affliction(chart1_data["csl_significators"], [2, 11])
     c2_dhana = check_affliction(chart2_data["csl_significators"], [2, 11])
-    results['Financial_Match'] = "Strong" if c1_dhana and c2_dhana else "Average"
-    c1_karaka = check_affliction(chart1_data["jupiter_significators"], [7, 11])
-    c2_karaka = check_affliction(chart2_data["venus_significators"], [7, 11])
-    results['Karaka_Compatibility'] = "High" if c1_karaka and c2_karaka else "Moderate"
+    fin_match = "Strong" if c1_dhana and c2_dhana else "Average"
+    results['Financial_Match'] = fin_match
+    details.append({
+        "factor": "Financial Status", 
+        "c1": "Good (2,11)" if c1_dhana else "Average", 
+        "c2": "Good (2,11)" if c2_dhana else "Average", 
+        "rule": "7th CSL links to 2 (Wealth) or 11 (Gains).",
+        "verdict": fin_match
+    })
+
+    # 6. Karaka Compatibility (Jupiter/Venus)
+    c1_karaka = check_affliction(chart1_data["jupiter_significators"], [2, 7, 11])
+    c2_karaka = check_affliction(chart2_data["venus_significators"], [2, 7, 11])
+    karaka_match = "High" if c1_karaka and c2_karaka else "Moderate"
+    results['Karaka_Compatibility'] = karaka_match
+    
+    # 7. 7th Lord Strength
     c1_7th_lord_ok = not check_affliction(chart1_data["csl_significators"], [6, 8, 12])
     c2_7th_lord_ok = not check_affliction(chart2_data["csl_significators"], [6, 8, 12])
     results['7th_Lord_Strength'] = "Good" if c1_7th_lord_ok and c2_7th_lord_ok else "Weak/Afflicted"
+
+    # 8. Ashtama Shani (Saturn in 8th)
     c1_sat_8th = 8 in chart1_data["saturn_significators"]
     c2_sat_8th = 8 in chart2_data["saturn_significators"]
-    results['Ashtama_Shani_Effect'] = "High Risk (Natal)" if c1_sat_8th or c2_sat_8th else "Low Risk"
+    ash_shani = "High Risk (Natal)" if c1_sat_8th or c2_sat_8th else "Low Risk"
+    results['Ashtama_Shani_Effect'] = ash_shani
+    details.append({
+        "factor": "Ashtama Shani", 
+        "c1": "Yes" if c1_sat_8th else "No", 
+        "c2": "Yes" if c2_sat_8th else "No", 
+        "rule": "Saturn signifying 8th house causes delays/obstacles.",
+        "verdict": ash_shani
+    })
+
     results['Dasha_Synchronization'] = "Favorable" if chart1_data["marriage_promise"] != "DENIAL" and chart2_data["marriage_promise"] != "DENIAL" else "Unfavorable"
     results['Rasi_Navamsa_Match'] = f"Moon Rasi Lords: {chart1_data['rasi_lord']} vs {chart2_data['rasi_lord']}"
+    
     c1_lagna_lord = SIGN_LORD_MAP.get(int(chart1_data["cusps"][0] / 30) % 12)
     c2_lagna_lord = SIGN_LORD_MAP.get(int(chart2_data["cusps"][0] / 30) % 12)
     results['Lagna_Lord_Friendship'] = f"Lords are {c1_lagna_lord} & {c2_lagna_lord}"
@@ -401,7 +574,8 @@ def calculate_supplementary_factors(chart1_data, chart2_data):
         chart1_data["d9_lagna_lord"], chart2_data["d9_lagna_lord"]
     )
 
-    return results
+    return results, details
+
 
 def get_graha_position_details(planet_name, longitude):
     star_lord, sub_lord = get_star_sub_lord(longitude)
@@ -415,7 +589,7 @@ def check_kuja_cancellation(mars_lon, planets, d9_planets, moon_lon, sun_lon):
     if mars_sign_index in PLANET_OWN_SIGN["Mars"]: return True, "Cancelled (Own Sign D1)"
     if mars_sign_index == PLANET_EXALTATION["Mars"]: return True, "Cancelled (Exalted D1)"
     if mars_sign_index == PLANET_DEBILITATION["Mars"]: return True, "Cancelled (Debilitated D1)"
-    if mars_sign_index in [4, 8, 11]: return True, "Cancelled (Benefic Sign D1)"
+    if mars_sign_index in [4, 8, 10, 11]: return True, "Cancelled (Benefic/Friendly Sign D1)"
 
     benefics = {"Jupiter": planets.get("Jupiter"), "Venus": planets.get("Venus")}
     moon_sun_dist = abs(moon_lon - sun_lon)
@@ -539,8 +713,13 @@ def analyze_chart(dob: date, tob: time, latitude: float, longitude: float, timez
         jd = get_julian_day(dob, tob, timezone_str)
         se.set_sid_mode(SE_AYANAMSA)
 
-        result = se.houses(jd, latitude, longitude, b"P")
-        cusps = list(result[0])[0:12]
+        result = se.houses_ex(jd, latitude, longitude, b"P", flags=se.FLG_SIDEREAL)
+        raw_cusps = result[0]
+        # Handle pyswisseph returning 13 elements (0, H1..H12) or 12 elements (H1..H12)
+        if len(raw_cusps) == 13:
+            cusps = list(raw_cusps)[1:13]
+        else:
+            cusps = list(raw_cusps)[0:12]
         
         planets = {}
         for p_id, p_name in PLANET_IDS_ALL.items():
@@ -595,10 +774,26 @@ def analyze_chart(dob: date, tob: time, latitude: float, longitude: float, timez
         )
 
         pitra_dosha_present = False
-        if (9 in get_significators(planets["Rahu"], cusps, planets) or 
-            9 in get_significators(planets["Ketu"], cusps, planets) or 
-            rahu_house == 9 or sun_house == 9):
+        def check_conjunction(p1_lon, p2_lon, limit=10.0):
+            if p1_lon is None or p2_lon is None: return False
+            diff = abs(p1_lon - p2_lon)
+            return diff < limit or diff > (360.0 - limit)
+            
+        rahu_lon = planets.get("Rahu")
+        ketu_lon = planets.get("Ketu")
+        sun_lon = planets.get("Sun")
+        moon_lon = planets.get("Moon")
+        
+        # 1. Rahu/Ketu in 9th House
+        if rahu_house == 9 or find_house_index(ketu_lon, cusps) == 9:
             pitra_dosha_present = True
+        # 2. Sun or Moon conjunct Rahu/Ketu
+        elif check_conjunction(sun_lon, rahu_lon) or check_conjunction(sun_lon, ketu_lon):
+            pitra_dosha_present = True
+        elif check_conjunction(moon_lon, rahu_lon) or check_conjunction(moon_lon, ketu_lon):
+            pitra_dosha_present = True
+        # 3. 9th Lord afflicted by Rahu/Ketu (Simple check: 9th Lord is Rahu/Ketu star lord?)
+        # For now, stick to strong conjunction/placement.
 
         kp_positions = []
         kp_positions.append(get_graha_position_details("Lagna Cusp", cusps[0]))
@@ -714,8 +909,8 @@ def generate_compatibility_report(chart1, chart2, disclaimer_text=None, contact_
         logging.error("Cannot generate report due to missing chart data.")
         return None
 
-    supplementary_results = calculate_supplementary_factors(chart1["analysis_data"], chart2["analysis_data"])
-    guna_score = calculate_ashtakoota(chart1["analysis_data"], chart2["analysis_data"])
+    supplementary_results, supplementary_details = calculate_supplementary_factors(chart1["analysis_data"], chart2["analysis_data"])
+    guna_score, guna_details = calculate_ashtakoota(chart1["analysis_data"], chart2["analysis_data"])
 
     # Dasha & CSL Logic
     c1_11_link = 11 in chart1["csl_significators"]
@@ -883,6 +1078,14 @@ def generate_compatibility_report(chart1, chart2, disclaimer_text=None, contact_
     story.append(Table(promise_data, colWidths=[130, 90, 90, 190], style=table_style_data))
     story.append(Spacer(1, 12))
     
+    story.append(Paragraph("Detailed Guna Milan Breakdown:", styles["h3"]))
+    guna_header = ["Koota (Factor)", "Score", "Description / Value", "Rule / Logic"]
+    guna_table_data = [guna_header] + guna_details
+    guna_table = Table(guna_table_data, colWidths=[110, 60, 150, 180])
+    guna_table.setStyle(table_style_data)
+    story.append(guna_table)
+    story.append(Spacer(1, 12))
+    
     story.append(Paragraph(f"Current Vimsottari Dasha Period ({datetime.now().strftime('%Y-%m-%d')}) Match:", styles["h3"]))
     dasha_table_data = [
         ["Dasha Lord", f"Native 1 ({chart1['name']})", f"Native 2 ({chart2['name']})", "Status (N1)", "Status (N2)"],
@@ -902,8 +1105,8 @@ def generate_compatibility_report(chart1, chart2, disclaimer_text=None, contact_
     twenty_one_data = [
         ["Factor", chart1['name'] + " Status", chart2['name'] + " Status", "Compatibility Verdict"],
         ["Kuja Dosha Parity", chart1["mars_dosha_status"]["Total"], chart2["mars_dosha_status"]["Total"], supplementary_results['Kuja_Dosha_Parity']],
-        ["Ayurvriddhi (Longevity)", "Good" if not any(h in chart1["csl_significators"] for h in [8, 12]) else "Risk", "Good" if not any(h in chart2["csl_significators"] for h in [8, 12]) else "Risk", supplementary_results['Ayurvriddhi_Match']],
-        ["Vaidhavya Dosha", supplementary_results['Vaidhavya_Risk'], supplementary_results['Vaidhavya_Risk'], supplementary_results['Vaidhavya_Risk']],
+        ["Marital Stability / Longevity", "Good" if not any(h in chart1["csl_significators"] for h in [6, 8, 12]) else "Risk", "Good" if not any(h in chart2["csl_significators"] for h in [6, 8, 12]) else "Risk", supplementary_results['Ayurvriddhi_Match']],
+        ["Vaidhavya / Separation Risk", supplementary_results['Vaidhavya_Risk'], supplementary_results['Vaidhavya_Risk'], supplementary_results['Vaidhavya_Risk']],
         ["Pitra Dosha Match", "Present" if chart1["pitra_dosha_present"] else "Clean", "Present" if chart2["pitra_dosha_present"] else "Clean", supplementary_results['Pitra_Dosha_Match']],
         ["Santana (Progeny)", "Promising" if any(h in chart1["csl_significators"] for h in [2, 5, 11]) else "Weak", "Promising" if any(h in chart2["csl_significators"] for h in [2, 5, 11]) else "Weak", supplementary_results['Progeny_Match']],
         ["Financial Match", "Strong" if any(h in chart1["csl_significators"] for h in [2, 11]) else "Average", "Strong" if any(h in chart2["csl_significators"] for h in [2, 11]) else "Average", supplementary_results['Financial_Match']],
@@ -915,6 +1118,23 @@ def generate_compatibility_report(chart1, chart2, disclaimer_text=None, contact_
         ["D9 Lagna Lord Friendship", chart1["analysis_data"]["d9_lagna_lord"], chart2["analysis_data"]["d9_lagna_lord"], supplementary_results['D9_Lagna_Lord_Friendship']],
     ]
     story.append(Table(twenty_one_data, colWidths=[150, 100, 100, 160], style=table_style_data))
+    
+    story.append(Spacer(1, 12))
+    story.append(Paragraph("Detailed Supplementary Factors Breakdown:", styles["h3"]))
+    supp_header = ["Factor", "Native 1 Status", "Native 2 Status", "Rule/Logic", "Verdict"]
+    supp_table_data = [supp_header]
+    for det in supplementary_details:
+        supp_table_data.append([
+            det["factor"],
+            det["c1"],
+            det["c2"],
+            Paragraph(det["rule"], styles["Normal"]),
+            det["verdict"]
+        ])
+    
+    supp_table = Table(supp_table_data, colWidths=[100, 80, 80, 150, 100])
+    supp_table.setStyle(table_style_data)
+    story.append(supp_table)
     
     # ------------------------------------------------------------------
     # NEW SECTIONS: FULL PLANETARY MATCHING WITH BHAVA (HOUSE)
@@ -951,58 +1171,89 @@ def generate_compatibility_report(chart1, chart2, disclaimer_text=None, contact_
         
         return [planet_key, display1, display2, friendship]
 
-    def build_match_table(title, dict1, dict2):
-        story.append(PageBreak())
-        story.append(Paragraph(title, styles["h2"]))
-        story.append(Spacer(1, 6))
-        
-        # Visual Charts for this section
-        c1_data = get_south_chart_data(dict1, f"{chart1['name']}\n{title.split()[2]}")
-        c2_data = get_south_chart_data(dict2, f"{chart2['name']}\n{title.split()[2]}")
-        t1 = Table(c1_data, colWidths=[40,40,40,40], rowHeights=[40,40,40,40])
-        t1.setStyle(chart_style)
-        t2 = Table(c2_data, colWidths=[40,40,40,40], rowHeights=[40,40,40,40])
-        t2.setStyle(chart_style)
-        story.append(Table([[t1, Spacer(20, 20), t2]]))
+    def build_match_table(title, planet_keys, dict1, dict2):
         story.append(Spacer(1, 12))
+        story.append(Paragraph(title, styles["h3"]))
+        header = ["Planet", "N1 Sign", "N1 Bhava", "N2 Sign", "N2 Bhava", "Relation", "Points"]
+        table_data = [header]
+        
+        total_pts = 0
+        possible_pts = 0
+        
+        # Helper to get sign/lord/bhava
+        def get_data(d, p, cusps):
+            if p not in d: return "-", "-", "-"
+            lon = d[p]
+            sign_idx = int(lon / 30)
+            sign_name = ZODIAC_SIGNS[sign_idx]
+            lord = SIGN_LORD_MAP[sign_idx]
+            # Simple bhava approx
+            h_idx = find_house_index(lon, cusps)
+            return sign_name, lord, h_idx
 
-        header = ["Planet", f"{chart1['name']} Sign [Bhava]", f"{chart2['name']} Sign [Bhava]", "Lords Friendship"]
-        rows = [header]
-        friendly_count = 0
-        total_checked = 0
-        
-        planets_to_check = ["Lagna", "Sun", "Moon", "Mars", "Mercury", "Jupiter", "Venus", "Saturn", "Rahu", "Ketu"]
-        
-        if title.startswith("7."): 
-            d1_dict1 = dict1.copy(); d1_dict1["Lagna"] = chart1["analysis_data"]["cusps"][0]
-            d1_dict2 = dict2.copy(); d1_dict2["Lagna"] = chart2["analysis_data"]["cusps"][0]
-            final_d1 = d1_dict1
-            final_d2 = d1_dict2
-        else:
-            final_d1 = dict1
-            final_d2 = dict2
+        for planet in planet_keys:
+            # For D1 we have cusps. For D9/D50 we might not have cusps in analysis_data structure easily available 
+            # or they are not passed here. Assuming D1 cusps for Bhava roughly or just Sign match.
+            # If D9/D50, Bhava has less meaning unless we calc D9 Lagna.
+            # We will use D1 cusps for D1, and just display Sign for others if Bhava not avail.
+            
+            # Using Chart1/2 analysis data for cusps
+            c1_cusps = chart1["analysis_data"]["cusps"]
+            c2_cusps = chart2["analysis_data"]["cusps"]
+            
+            s1, l1, h1 = get_data(dict1, planet, c1_cusps)
+            s2, l2, h2 = get_data(dict2, planet, c2_cusps)
+            
+            if s1 == "-": continue
 
-        for p in planets_to_check:
-            row = get_chart_match_row(p, final_d1, final_d2)
-            if row:
-                rows.append(row)
-                if "Friend" in row[3]: friendly_count += 1
-                total_checked += 1
-        
-        t = Table(rows, colWidths=[60, 160, 160, 120], style=table_style_data)
+            # Relation Points
+            pts = 0
+            rel = "Neutral"
+            
+            if l1 == l2: 
+                pts = 5; rel = "Same Lord"
+            else:
+                fr1 = GRAHA_MAITRI_PARASHARI.get(l1, {}).get(l2, 1)
+                fr2 = GRAHA_MAITRI_PARASHARI.get(l2, {}).get(l1, 1)
+                if fr1==2 and fr2==2: pts=4; rel="Friends"
+                elif fr1==0 and fr2==0: pts=0; rel="Enemies"
+                elif (fr1==2 and fr2==0) or (fr1==0 and fr2==2): pts=1; rel="Mixed"
+                else: pts=2; rel="Neutral"
+            
+            # Bhava Harmony (Only for D1 really relevant here with these cusps)
+            if "D1" in title:
+                h_dist = (h2 - h1 + 12) % 12
+                if h_dist in [0, 4, 8]: pts += 2; rel += " + Trine"
+                elif h_dist in [3, 6, 9]: pts += 1; rel += " + Kendra"
+                elif h_dist in [5, 7]: pts -= 2; rel += " - 6/8 Dosha"
+            
+            pts = max(0, min(pts, 7))
+            
+            table_data.append([planet, f"{s1} ({l1})", h1, f"{s2} ({l2})", h2, rel, str(pts)])
+            total_pts += pts
+            possible_pts += 7
+
+        t = Table(table_data, colWidths=[60, 80, 50, 80, 50, 100, 50])
+        t.setStyle(table_style_data)
         story.append(t)
-        story.append(Spacer(1, 12))
-        story.append(Paragraph(f"Compatibility Score: {friendly_count} / {total_checked} Friendly Pairs", styles["h3"]))
-        return friendly_count
+        story.append(Paragraph(f"<b>Total Score: {total_pts} / {possible_pts}</b>", styles["Normal"]))
+        
+        return round((total_pts / possible_pts) * 10, 1) if possible_pts > 0 else 0
 
     # 7. D1 Match
-    d1_score = build_match_table("7. Full D1 (Rasi) Match", chart1["analysis_data"]["planets"], chart2["analysis_data"]["planets"])
+    d1_score = build_match_table("7. Full D1 (Rasi) Match", ["Sun", "Moon", "Mars", "Mercury", "Jupiter", "Venus", "Saturn", "Rahu", "Ketu"], chart1["analysis_data"]["planets"], chart2["analysis_data"]["planets"])
     
     # 8. D9 Match
-    d9_score = build_match_table("8. Full D9 (Navamsa) Match", chart1["analysis_data"]["d9_planets"], chart2["analysis_data"]["d9_planets"])
+    # Using simple logic for D9 planets since we don't have them pre-calculated in analysis_data except partially
+    # But wait, analyze_chart DOES calculate d9_planets now! (Lines 725-730 in previous read)
+    # So we can use chart1["analysis_data"]["d9_planets"] directly if available.
+    # Let's check analyze_chart again.
+    # Yes, it has "d9_planets": d9_planets
     
+    d9_score = build_match_table("8. Full D9 (Navamsa) Match", ["Sun", "Moon", "Mars", "Mercury", "Jupiter", "Venus", "Saturn"], chart1["analysis_data"]["d9_planets"], chart2["analysis_data"]["d9_planets"])
+
     # 9. D50 Match
-    d50_score = build_match_table("9. Full D50 (50th Harmonic) Match", chart1["analysis_data"]["d50_planets"], chart2["analysis_data"]["d50_planets"])
+    d50_score = build_match_table("9. Full D50 (Harmonic) Match", ["Sun", "Moon", "Mars", "Mercury", "Jupiter", "Venus", "Saturn"], chart1["analysis_data"]["d50_planets"], chart2["analysis_data"]["d50_planets"])
     
     story.append(Spacer(1, 24))
     
@@ -1147,6 +1398,64 @@ def get_timezone_from_coords(lat, lon):
         logging.warning(f"Timezone lookup failed: {e}")
     return None
 
+def smart_place_search(query):
+    """
+    Enhanced search to handle cases like 'Nuzvidu' (Town) vs 'Nuzvidu Road' (Street).
+    Prioritizes places/settlements over roads.
+    """
+    if not query: return []
+    try:
+        # 1. Initial Search
+        results = geolocator.geocode(query, exactly_one=False, limit=10, timeout=10)
+        if not results: results = []
+        
+        # 2. Check for places
+        place_results = []
+        other_results = []
+        
+        def is_place(loc):
+            # Check Nominatim raw data for class/type
+            cls = loc.raw.get('class', '')
+            typ = loc.raw.get('type', '')
+            # Prioritize settlements, boundaries (cities), etc.
+            if cls in ['place', 'boundary'] or typ in ['city', 'town', 'village', 'hamlet', 'administrative']:
+                return True
+            return False
+
+        for loc in results:
+            if is_place(loc):
+                place_results.append(loc)
+            else:
+                other_results.append(loc)
+
+        # 3. Fallback for common South Indian suffix 'u' (e.g. Nuzvidu -> Nuzvid)
+        # Only if no clear place was found in the top results for the original query
+        if not place_results and query.strip().lower().endswith('u') and len(query.strip()) > 3:
+            stripped_query = query.strip()[:-1]
+            fallback_results = geolocator.geocode(stripped_query, exactly_one=False, limit=10, timeout=10)
+            if fallback_results:
+                for loc in fallback_results:
+                    if is_place(loc):
+                        place_results.append(loc)
+                    else:
+                        pass 
+        
+        # Combine: Places first, then others
+        final_results = place_results + other_results
+        
+        # Remove duplicates based on address
+        seen = set()
+        unique_results = []
+        for loc in final_results:
+            if loc.address not in seen:
+                seen.add(loc.address)
+                unique_results.append(loc)
+                
+        return unique_results
+    except Exception as e:
+        st.error(f"Geocoding Error: {e}")
+        return []
+
 def build_tz_options(current_tz):
     base = ["Select Timezone..."] + sorted(common_timezones)
     if current_tz and current_tz not in base:
@@ -1164,6 +1473,15 @@ def main():
     if "n2_lon" not in st.session_state: st.session_state["n2_lon"] = 0.0
     if "n1_tz" not in st.session_state: st.session_state["n1_tz"] = "Select Timezone..."
     if "n2_tz" not in st.session_state: st.session_state["n2_tz"] = "Select Timezone..."
+    if "n1_search_results" not in st.session_state: st.session_state["n1_search_results"] = []
+    if "n2_search_results" not in st.session_state: st.session_state["n2_search_results"] = []
+    
+    # Initialize lat/lon with 0.0 only if not already set (which they shouldn't be if we are here)
+    if "n1_lat" not in st.session_state: st.session_state["n1_lat"] = 0.0
+    if "n1_lon" not in st.session_state: st.session_state["n1_lon"] = 0.0
+    if "n2_lat" not in st.session_state: st.session_state["n2_lat"] = 0.0
+    if "n2_lon" not in st.session_state: st.session_state["n2_lon"] = 0.0
+    
     disclaimer = st.text_area("Disclaimer", value="Disclaimer: The insights and reports generated by this application are based on astrological calculations and interpretations. They are informational and should not be considered professional, legal, medical, or financial advice, nor a guarantee of outcomes. Users should exercise personal judgment and consult qualified professionals for important decisions. The developer and consultant assume no liability for actions taken based on this report.", height=150, key="disclaimer_text")
     contact_name = st.text_input("Contact Name", value="jph pratap sarma", placeholder="Your name", key="contact_name")
     contact_mobile = st.text_input("Mobile Number", value="9963436736", placeholder="Your mobile", key="contact_mobile")
@@ -1180,24 +1498,49 @@ def main():
     with col1:
         st.subheader("Boy (Native 1) Details")
         n1_name = st.text_input("Name", value="", placeholder="Enter name", key="n1_name")
-        n1_dob = st.date_input("Date of Birth", value=None, min_value=date(1900, 1, 1), max_value=date(2100, 12, 31), key="n1_dob")
-        n1_tob = st.time_input("Time of Birth", value=None, step=60, key="n1_tob")
-        n1_pob_choice = st.selectbox("Place of Birth", PLACE_CHOICES, key="n1_pob_choice")
-        n1_pob = n1_pob_choice if n1_pob_choice != "Other (enter manually)" else st.text_input("Place of Birth (City, Country)", value="", placeholder="City, Country", key="n1_pob")
+        n1_dob_str = st.text_input("Date of Birth (DDMMYYYY)", value="", placeholder="DDMMYYYY", key="n1_dob_input")
+        n1_dob = None
+        if n1_dob_str:
+            try:
+                n1_dob = datetime.strptime(n1_dob_str, "%d%m%Y").date()
+            except ValueError:
+                st.error("Invalid Date Format. Please use DDMMYYYY (e.g., 25121990)")
         
-        if st.button("Fetch Coordinates (Boy)", key="n1_fetch"):
-            lat, lon = fetch_lat_lon(n1_pob)
-            if lat is not None:
-                st.session_state.n1_lat = lat
-                st.session_state.n1_lon = lon
-                tzname = get_timezone_from_coords(lat, lon)
-                if tzname:
-                    st.session_state.n1_tz = tzname
-                    st.success(f"Found: {lat:.4f}, {lon:.4f} | Timezone: {tzname}")
-                else:
-                    st.success(f"Found: {lat:.4f}, {lon:.4f}")
-            else:
-                st.error("Could not find coordinates.")
+        n1_tob_str = st.text_input("Time of Birth (HHMM 24hr)", value="", placeholder="HHMM", key="n1_tob_input")
+        n1_tob = None
+        if n1_tob_str:
+            try:
+                # Pad with leading zero if 3 digits (e.g., 930 -> 0930)
+                if len(n1_tob_str) == 3: n1_tob_str = "0" + n1_tob_str
+                n1_tob = datetime.strptime(n1_tob_str, "%H%M").time()
+            except ValueError:
+                st.error("Invalid Time Format. Please use HHMM (e.g., 1430 for 2:30 PM)")
+        
+        n1_query = st.text_input("Place of Birth (City)", key="n1_query_input")
+        if st.button("Search Places (Boy)", key="n1_search_btn"):
+             if n1_query:
+                 try:
+                     locs = smart_place_search(n1_query)
+                     if locs:
+                         st.session_state["n1_search_results"] = [(l.address, l.latitude, l.longitude) for l in locs]
+                     else:
+                         st.error("No places found.")
+                         st.session_state["n1_search_results"] = []
+                 except Exception as e:
+                     st.error(f"Search Error: {e}")
+        
+        if st.session_state.get("n1_search_results"):
+            options = [x[0] for x in st.session_state["n1_search_results"]]
+            selected_address = st.selectbox("Select Location", options, key="n1_sel_loc")
+            # Find selected
+            for addr, lat, lon in st.session_state["n1_search_results"]:
+                if addr == selected_address:
+                    st.session_state.n1_lat = lat
+                    st.session_state.n1_lon = lon
+                    # Auto Update TZ
+                    tz = get_timezone_from_coords(lat, lon)
+                    if tz: st.session_state.n1_tz = tz
+                    break
         
         n1_lat = st.number_input("Latitude", format="%.4f", key="n1_lat")
         n1_lon = st.number_input("Longitude", format="%.4f", key="n1_lon")
@@ -1209,24 +1552,48 @@ def main():
     with col2:
         st.subheader("Girl (Native 2) Details")
         n2_name = st.text_input("Name", value="", placeholder="Enter name", key="n2_name")
-        n2_dob = st.date_input("Date of Birth", value=None, min_value=date(1900, 1, 1), max_value=date(2100, 12, 31), key="n2_dob")
-        n2_tob = st.time_input("Time of Birth", value=None, step=60, key="n2_tob")
-        n2_pob_choice = st.selectbox("Place of Birth", PLACE_CHOICES, key="n2_pob_choice")
-        n2_pob = n2_pob_choice if n2_pob_choice != "Other (enter manually)" else st.text_input("Place of Birth (City, Country)", value="", placeholder="City, Country", key="n2_pob")
-
-        if st.button("Fetch Coordinates (Girl)", key="n2_fetch"):
-            lat, lon = fetch_lat_lon(n2_pob)
-            if lat is not None:
-                st.session_state.n2_lat = lat
-                st.session_state.n2_lon = lon
-                tzname = get_timezone_from_coords(lat, lon)
-                if tzname:
-                    st.session_state.n2_tz = tzname
-                    st.success(f"Found: {lat:.4f}, {lon:.4f} | Timezone: {tzname}")
-                else:
-                    st.success(f"Found: {lat:.4f}, {lon:.4f}")
-            else:
-                st.error("Could not find coordinates.")
+        n2_dob_str = st.text_input("Date of Birth (DDMMYYYY)", value="", placeholder="DDMMYYYY", key="n2_dob_input")
+        n2_dob = None
+        if n2_dob_str:
+            try:
+                n2_dob = datetime.strptime(n2_dob_str, "%d%m%Y").date()
+            except ValueError:
+                st.error("Invalid Date Format. Please use DDMMYYYY (e.g., 25121990)")
+                
+        n2_tob_str = st.text_input("Time of Birth (HHMM 24hr)", value="", placeholder="HHMM", key="n2_tob_input")
+        n2_tob = None
+        if n2_tob_str:
+            try:
+                if len(n2_tob_str) == 3: n2_tob_str = "0" + n2_tob_str
+                n2_tob = datetime.strptime(n2_tob_str, "%H%M").time()
+            except ValueError:
+                st.error("Invalid Time Format. Please use HHMM (e.g., 1430 for 2:30 PM)")
+                
+        n2_query = st.text_input("Place of Birth (City)", key="n2_query_input")
+        if st.button("Search Places (Girl)", key="n2_search_btn"):
+             if n2_query:
+                 try:
+                     locs = smart_place_search(n2_query)
+                     if locs:
+                         st.session_state["n2_search_results"] = [(l.address, l.latitude, l.longitude) for l in locs]
+                     else:
+                         st.error("No places found.")
+                         st.session_state["n2_search_results"] = []
+                 except Exception as e:
+                     st.error(f"Search Error: {e}")
+        
+        if st.session_state.get("n2_search_results"):
+            options = [x[0] for x in st.session_state["n2_search_results"]]
+            selected_address = st.selectbox("Select Location", options, key="n2_sel_loc")
+            # Find selected
+            for addr, lat, lon in st.session_state["n2_search_results"]:
+                if addr == selected_address:
+                    st.session_state.n2_lat = lat
+                    st.session_state.n2_lon = lon
+                    # Auto Update TZ
+                    tz = get_timezone_from_coords(lat, lon)
+                    if tz: st.session_state.n2_tz = tz
+                    break
 
         n2_lat = st.number_input("Latitude", format="%.4f", key="n2_lat")
         n2_lon = st.number_input("Longitude", format="%.4f", key="n2_lon")
